@@ -1,0 +1,8 @@
+# Python dependencies for CSC4220 Chat Server Project
+# Using only standard library modules - no external dependencies required
+
+# For testing (optional)
+pytest>=7.0.0
+
+# For colored terminal output (extra credit)
+colorama>=0.4.4
