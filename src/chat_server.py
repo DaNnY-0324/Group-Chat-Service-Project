@@ -264,25 +264,28 @@ class ChatServer:
             if data.get("type") == "command":
                 command = data.get("command", "")
                 nickname = data.get("nickname", "")
+                channel = data.get("channel", "")  # Get target channel for messages
                 
                 # Update client nickname if provided
                 with self.lock:
                     if client_socket in self.clients and nickname:
                         self.clients[client_socket].nickname = nickname
                 
-                self.process_command(client_socket, command)
+                # Pass channel to process_command for regular messages
+                self.process_command(client_socket, command, channel)
                 
         except json.JSONDecodeError:
             # Not JSON, treat as plain text command
-            self.process_command(client_socket, message)
+            self.process_command(client_socket, message, "")
     
-    def process_command(self, client_socket: socket.socket, command: str) -> None:
+    def process_command(self, client_socket: socket.socket, command: str, target_channel: str = "") -> None:
         """
         Process IRC-style commands from clients
         
         Args:
             client_socket: Socket of the client who sent the command
             command: Command string to process
+            target_channel: Target channel for regular messages (optional)
         """
         with self.lock:
             if client_socket not in self.clients:
@@ -316,8 +319,8 @@ class ChatServer:
             else:
                 self.send_error(client_socket, f"Unknown command: /{cmd}")
         else:
-            # Regular chat message
-            self.handle_chat_message(client_socket, command)
+            # Regular chat message - use target_channel if provided
+            self.handle_chat_message(client_socket, command, target_channel)
     
     def handle_nick_command(self, client_socket: socket.socket, args: List[str]) -> None:
         """Handle /nick command"""
@@ -418,25 +421,30 @@ class ChatServer:
     
     def handle_leave_command(self, client_socket: socket.socket, args: List[str]) -> None:
         """Handle /leave command"""
+        # Determine which channel(s) to leave
         with self.lock:
+            if client_socket not in self.clients:
+                return
+            
             client_info = self.clients[client_socket]
             
             if args:
                 channel = args[0]
                 if not channel.startswith("#"):
                     channel = "#" + channel
+                
+                if channel not in client_info.channels:
+                    self.send_error(client_socket, f"You are not in {channel}")
+                    return
+                
+                channels_to_leave = [channel]
             else:
                 # Leave all channels
                 channels_to_leave = list(client_info.channels)
-                for ch in channels_to_leave:
-                    self.remove_user_from_channel(client_socket, ch)
-                return
-            
-            if channel not in client_info.channels:
-                self.send_error(client_socket, f"You are not in {channel}")
-                return
-            
-            self.remove_user_from_channel(client_socket, channel)
+        
+        # Remove from channels (outside lock to avoid deadlock with remove_user_from_channel)
+        for ch in channels_to_leave:
+            self.remove_user_from_channel(client_socket, ch)
     
     def handle_quit_command(self, client_socket: socket.socket) -> None:
         """Handle /quit command"""
@@ -476,8 +484,9 @@ Tips:
             "message": help_text
         })
     
-    def handle_chat_message(self, client_socket: socket.socket, message: str) -> None:
+    def handle_chat_message(self, client_socket: socket.socket, message: str, target_channel: str = "") -> None:
         """Handle regular chat message"""
+        # Get client info and channels while holding lock
         with self.lock:
             if client_socket not in self.clients:
                 return
@@ -492,22 +501,34 @@ Tips:
                 self.send_error(client_socket, "Please join a channel first with /join <channel>")
                 return
             
-            # Broadcast message to all channels the user is in
-            for channel in client_info.channels:
-                self.broadcast_to_channel(
-                    {
-                        "type": "event",
-                        "event": "message",
-                        "nickname": client_info.nickname,
-                        "channel": channel,
-                        "message": message,
-                        "timestamp": time.time()
-                    },
-                    channel,
-                    exclude=client_socket
-                )
+            # Copy nickname and channels for use outside lock
+            nickname = client_info.nickname
+            channels = list(client_info.channels)
         
-        self.log(f"Message from {client_info.nickname}: {message}", "debug")
+        # Determine which channel(s) to broadcast to
+        if target_channel and target_channel in channels:
+            # Broadcast to specific target channel only
+            broadcast_channels = [target_channel]
+        else:
+            # Broadcast to all channels the user is in (fallback for backward compatibility)
+            broadcast_channels = channels
+        
+        # Broadcast message (outside lock to avoid deadlock)
+        for channel in broadcast_channels:
+            self.broadcast_to_channel(
+                {
+                    "type": "event",
+                    "event": "message",
+                    "nickname": nickname,
+                    "channel": channel,
+                    "message": message,
+                    "timestamp": time.time()
+                },
+                channel,
+                exclude=client_socket
+            )
+        
+        self.log(f"Message from {nickname} to {broadcast_channels}: {message}", "debug")
     
     def broadcast_to_channel(self, message: dict, channel: str, exclude: socket.socket = None) -> None:
         """

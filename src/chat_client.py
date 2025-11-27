@@ -46,6 +46,7 @@ class ChatClient:
         self.connected = False
         self.nickname = ""
         self.current_channel = ""
+        self.channels = set()  # Track all channels user is in
         self.receive_thread = None
         self.running = False
         self.server_host = ""
@@ -77,6 +78,9 @@ class ChatClient:
             self.server_port = port
             self.running = True
             
+            # Remove timeout for normal operations (keep socket blocking for receive)
+            self.client_socket.settimeout(None)
+            
             # Start message receiving thread
             self.receive_thread = threading.Thread(target=self.receive_messages, daemon=True)
             self.receive_thread.start()
@@ -98,12 +102,13 @@ class ChatClient:
             self.display_message(f"Connection error: {e}", "error")
             return False
     
-    def send_command(self, command_str: str) -> bool:
+    def send_command(self, command_str: str, channel: str = None) -> bool:
         """
         Send command to server
         
         Args:
             command_str: Command string to send
+            channel: Optional channel to send message to (for regular messages)
             
         Returns:
             True if sent successfully, False otherwise
@@ -120,6 +125,10 @@ class ChatClient:
                 "nickname": self.nickname,
                 "timestamp": time.time()
             }
+            
+            # Add channel for regular messages (not commands)
+            if channel:
+                message["channel"] = channel
             
             # Send as JSON
             message_json = json.dumps(message) + "\n"
@@ -142,7 +151,7 @@ class ChatClient:
         
         while self.running and self.connected:
             try:
-                # Receive data from server
+                # Receive data from server (blocking call)
                 data = self.client_socket.recv(1024).decode('utf-8')
                 if not data:
                     # Server closed connection
@@ -158,8 +167,11 @@ class ChatClient:
                     if line.strip():
                         self.process_server_message(line.strip())
                         
-            except socket.timeout:
-                continue  # Keep trying
+            except OSError as e:
+                # Socket was closed
+                if self.running:
+                    self.display_message("Connection lost.", "error")
+                break
             except Exception as e:
                 if self.running:  # Only show error if we're still supposed to be running
                     self.display_message(f"Error receiving messages: {e}", "error")
@@ -248,12 +260,15 @@ class ChatClient:
                         self.display_message("Not connected. Use /connect to connect to a server.", "error")
                         continue
                     
-                    if not self.current_channel:
+                    if not self.channels:
                         self.display_message("Not in a channel. Use /join <channel> to join a channel.", "error")
                         continue
                     
-                    # Send as regular message
-                    self.send_command(user_input)
+                    # Echo message locally (since server excludes sender from broadcast)
+                    self.display_message(f"[{self.current_channel}] <{self.nickname}> {user_input}", "chat")
+                    
+                    # Send as regular message with current channel
+                    self.send_command(user_input, channel=self.current_channel)
                     
             except EOFError:
                 # Ctrl+D pressed
@@ -320,6 +335,7 @@ class ChatClient:
                 channel = "#" + channel
             
             self.current_channel = channel
+            self.channels.add(channel)  # Track this channel
             return self.send_command(f"/join {channel}")
         
         elif cmd == "leave":
@@ -327,8 +343,18 @@ class ChatClient:
             if channel and not channel.startswith("#"):
                 channel = "#" + channel
             
+            # Remove from tracked channels
+            if channel in self.channels:
+                self.channels.remove(channel)
+            
+            # If leaving current channel, switch to another channel if available
             if channel == self.current_channel:
-                self.current_channel = ""
+                if self.channels:
+                    # Switch to first available channel
+                    self.current_channel = list(self.channels)[0]
+                else:
+                    # No channels left
+                    self.current_channel = ""
             
             return self.send_command(f"/leave {channel}" if channel else "/leave")
         

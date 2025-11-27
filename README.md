@@ -15,7 +15,17 @@ Multi-client chat server implementation inspired by IRC principles, built with P
 - **COMPLETED**: All core functionality implemented and tested
 - **COMPLETED**: Protocol classes and utilities (David & Romeo)
 - **COMPLETED**: Unit and integration tests
+- **COMPLETED**: Critical bug fixes for multi-channel support
 - **READY**: Project ready for submission and demo
+
+### Recent Improvements (Nov 26, 2024)
+
+- ✅ Fixed socket timeout issue in client receive thread
+- ✅ Fixed deadlock in server message broadcasting
+- ✅ Fixed deadlock in `/leave` command
+- ✅ Implemented proper channel-specific messaging
+- ✅ Added multi-channel tracking in client
+- ✅ Improved channel isolation and message routing
 
 ## Requirements
 
@@ -24,7 +34,9 @@ Multi-client chat server implementation inspired by IRC principles, built with P
 
 ## Demo Video Link
 
-[TODO: Add YouTube link here]
+**🎥 Watch the Demo:** [CSC4220 Chat Server - Multi-Client IRC Implementation](https://youtu.be/sZZCBzJe06I)
+
+This 5-minute video demonstrates all three implementation stages, extra credit features, and the complete functionality of our multi-threaded chat server.
 
 ## File/Folder Manifest
 
@@ -66,21 +78,26 @@ CSC4220_ChatServer_Team/
   - Graceful Ctrl-C shutdown (+5 points)
   - Enhanced logging system (+5 points)
 - 3-minute inactivity auto-shutdown
-- Thread-safe operations with proper locking
-- JSON-based message protocol
+- Thread-safe operations with proper locking (deadlock-free)
+- Channel-specific message broadcasting
+- Accurate user count tracking per channel
+- JSON-based message protocol with channel targeting
 
 ### ✅ Client Features (chat_client.py)
 
 - Full IRC command support:
   - `/connect <server> [port]` - Connect to server
   - `/nick <nickname>` - Set unique nickname
-  - `/join <channel>` - Join/create channels
-  - `/leave [channel]` - Leave channels
+  - `/join <channel>` - Join/create channels (supports multiple channels)
+  - `/leave [channel]` - Leave specific or all channels
   - `/list` - List channels and user counts
   - `/quit` - Graceful disconnect
   - `/help` - Show help information
-- Multi-threaded message receiving
+- Multi-channel support with automatic channel switching
+- Multi-threaded message receiving with blocking socket
+- Channel-specific message routing
 - Colored terminal output
+- Local message echo for immediate feedback
 - Robust error handling and connection management
 
 ### ✅ Client Interface (client_main.py)
@@ -486,9 +503,11 @@ This shows:
 
 - **Max Concurrent Clients**: 4 (configurable in code)
 - **Idle Timeout**: 3 minutes of inactivity
-- **Message Length**: 512 characters max
-- **Nickname Length**: 16 characters max
-- **Channel Name Length**: 32 characters max
+- **Message Length**: Unlimited (buffered reception)
+- **Nickname Length**: 32 characters max
+- **Channel Name Length**: Unlimited (auto-prefixed with #)
+- **Concurrent Channels**: Unlimited per user
+- **Thread Safety**: Full lock-based synchronization
 
 ## 🔧 Development Process
 
@@ -515,7 +534,41 @@ This shows:
 
 ### Observations
 
-- **Thread Safety**: Careful use of locks prevents race conditions
+- **Thread Safety**: Careful use of locks prevents race conditions and deadlocks
 - **Scalability**: Thread pool design allows controlled resource usage
 - **User Experience**: Colored output and clear error messages improve usability
 - **Robustness**: Graceful handling of network errors and client disconnections
+- **Multi-Channel**: Proper channel isolation ensures messages only go to intended recipients
+- **Real-time**: Blocking socket design ensures immediate message delivery
+
+## 🐛 Known Issues & Fixes
+
+### Fixed Issues
+
+1. **Socket Timeout in Client** (Fixed)
+   - **Issue**: Client receive thread would timeout and miss server responses
+   - **Fix**: Removed timeout after connection, using blocking socket instead
+
+2. **Message Broadcasting Deadlock** (Fixed)
+   - **Issue**: Server deadlock when broadcasting messages to channels
+   - **Fix**: Release lock before calling `broadcast_to_channel`
+
+3. **Leave Command Deadlock** (Fixed)
+   - **Issue**: `/leave` command would deadlock and not remove user from channel
+   - **Fix**: Refactored to release lock before calling `remove_user_from_channel`
+
+4. **Multi-Channel Message Leakage** (Fixed)
+   - **Issue**: Messages sent to one channel appeared in all user's channels
+   - **Fix**: Client now sends target channel; server broadcasts to specific channel only
+
+5. **Channel Switching** (Fixed)
+   - **Issue**: Client couldn't track multiple channels properly
+   - **Fix**: Added `channels` set to track all joined channels with auto-switching
+
+### Testing Recommendations
+
+1. **Multi-Client Test**: Run 3+ clients simultaneously
+2. **Multi-Channel Test**: Have users join different combinations of channels
+3. **Leave/Join Test**: Test `/leave` and `/join` commands extensively
+4. **Message Isolation Test**: Verify messages only appear in correct channels
+5. **Graceful Shutdown Test**: Test Ctrl-C on both server and clients
